@@ -1,12 +1,14 @@
 #pragma once
 #include <esp_err.h>
 
-#define MAX_MANUFACTURER_LENGTH 16
-#define MAX_MODEL_LENGTH 20
-#define MAX_EQUIPMENT_ID_LENGTH 37  // UUID string length (36) + null terminator
-#define MAX_VERSION_LENGTH 16
-
 struct device_config_t {
+      enum {
+        MAX_MANUFACTURER_LENGTH = 16,
+        MAX_MODEL_LENGTH = 20,
+        MAX_EQUIPMENT_ID_LENGTH = 37,  // UUID string length (36) + null terminator
+        MAX_VERSION_LENGTH = 32
+      };
+
     device_config_t() {}
     char manufacturer[MAX_MANUFACTURER_LENGTH] = {};
     char model[MAX_MODEL_LENGTH] = {};

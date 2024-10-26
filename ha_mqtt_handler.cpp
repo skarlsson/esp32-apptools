@@ -1,4 +1,4 @@
-#include "apptools/mqtt_handler.h"
+#include "apptools/ha_mqtt_handler.h"
 #include <algorithm>
 #include "esp_log.h"
 #include "apptools/log_collector.h"
@@ -10,13 +10,13 @@ static const char *TAG = "mqtt_handler_ota";
 #define MAX_PAYLOAD_LEN 1024
 #define MQTT_ROOT_TOPIC "huzza32"
 
-mqtt_handler_ota::mqtt_handler_ota(const esp_mqtt_client_config_t *mqtt_config, const device_config_t *config,
+ha_mqtt_handler::ha_mqtt_handler(const esp_mqtt_client_config_t *mqtt_config, const device_config_t *config,
                                    ota_handler *ota_handler) : mqtt_client_(esp_mqtt_client_init(mqtt_config)),
                                                                config_(config),
                                                                ota_handler_(ota_handler) {
 }
 
-void mqtt_handler_ota::start() {
+void ha_mqtt_handler::start() {
     auto err = esp_mqtt_client_start(mqtt_client_);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(err));
@@ -41,10 +41,10 @@ void mqtt_handler_ota::start() {
         .name = "state_timer"
     };
     esp_timer_create(&timer_args, &state_timer_);
-    esp_timer_start_periodic(state_timer_, 5 * 1000000); // 60 seconds in microseconds
+    esp_timer_start_periodic(state_timer_, 100000); // 10hz
 }
 
-mqtt_handler_ota::~mqtt_handler_ota() {
+ha_mqtt_handler::~ha_mqtt_handler() {
     log_collector_->disable();
     // Stop and delete the timer
     if (state_timer_) {
@@ -62,28 +62,37 @@ mqtt_handler_ota::~mqtt_handler_ota() {
     delete log_collector_;
 }
 
-void mqtt_handler_ota::enable_logging() {
+void ha_mqtt_handler::enable_logging() {
     log_collector_->enable();
 }
 
-void mqtt_handler_ota::send_logs(const char* logs, size_t size) {
+void ha_mqtt_handler::send_logs(const char* logs, size_t size) {
     char topic[MAX_TOPIC_LEN];
     snprintf(topic, sizeof(topic), "%s/%s/logs", MQTT_ROOT_TOPIC, config_->eid);
 
     esp_mqtt_client_publish(mqtt_client_, topic, logs, size, 0, 0);
 }
 
-void mqtt_handler_ota::add_subdevice(const SubdeviceInfo& subdevice) {
-    subdevices_.push_back(subdevice);
+void ha_mqtt_handler::addDevice(std::shared_ptr<ha_discovery::device_info_t> p) {
+    // TODO SHOULD WE BE ABLE TO REDISCOVER UPDATED SENSORS - IE UPDATED VERSIONS?
+    sub_devices_.push_back(p);
+    publish_discovery(p);
 }
 
+/*void mqtt_handler_ota::add_device_sensor(const char* eid, std::shared_ptr<SensorWrapper> sensor) {
+    for (const auto& config : sensor->getDiscoveryConfigs()) {
+        publish_subdevice_discovery(eid, config);
+    }
+}
+*/
+
 void
-mqtt_handler_ota::event_handler_wrapper(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
-    mqtt_handler_ota *handler = static_cast<mqtt_handler_ota *>(handler_args);
+ha_mqtt_handler::event_handler_wrapper(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+    auto handler = static_cast<ha_mqtt_handler *>(handler_args);
     handler->event_handler(base, event_id, event_data);
 }
 
-void mqtt_handler_ota::event_handler(esp_event_base_t base, int32_t event_id, void *event_data) {
+void ha_mqtt_handler::event_handler(esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t) event_data;
     //esp_mqtt_client_handle_t client = event->client;
     switch (event->event_id) {
@@ -111,8 +120,7 @@ void mqtt_handler_ota::event_handler(esp_event_base_t base, int32_t event_id, vo
     }
 }
 
-
-void mqtt_handler_ota::handle_control_message(const char *topic, int topic_len, const char *data, int data_len) {
+void ha_mqtt_handler::handle_control_message(const char *topic, int topic_len, const char *data, int data_len) {
     // I want this allocation to go on the heap
     static char topic_str[MAX_TOPIC_LEN];
     static char value[MAX_PAYLOAD_LEN];
@@ -141,19 +149,19 @@ void mqtt_handler_ota::handle_control_message(const char *topic, int topic_len, 
     }
 }
 
-void mqtt_handler_ota::publish_auto_discovery() {
+void ha_mqtt_handler::publish_auto_discovery() {
     // we could move this to a better structure since we dont export to ha
-    ControlConfig subscriptions[] = {
+    ha_discovery::control_config_t subscriptions[] = {
         {"text", "config", "config_string", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, 0},
         {"text", "ota", "ota_string", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, 0}
         };
 
     // default ha config
-    ControlConfig builtin_controls[] = {
+    ha_discovery::control_config_t builtin_controls[] = {
         {"button", "reboot", "reboot_button", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, 0},
     };
 
-    ControlConfig builtin_sensors[] = {
+    ha_discovery::control_config_t builtin_sensors[] = {
         {"sensor", "uptime", "uptime", "s", 0, 0, 0, nullptr, "duration", nullptr, 0},
         {"sensor", "cpu_load", "cpu_load", "%", 0, 100, 0.1, nullptr, nullptr, nullptr, 0},
         {"sensor", "free_memory", "free_memory", "bytes", 0, 0, 0, nullptr, nullptr, nullptr, 0}
@@ -168,10 +176,13 @@ void mqtt_handler_ota::publish_auto_discovery() {
     }
 
     for (const auto& sensor : sensors_) {
-        for (const auto& config : sensor->getDiscoveryConfigs()) {
+        for (const auto& config : sensor->get_control_config()) {
             publish_discovery(config);
         }
     }
+
+    for (auto& sub_device : sub_devices_ )
+       publish_discovery(sub_device);
 
     for (const auto &subscription: subscriptions) {
             char topic[128];
@@ -190,39 +201,86 @@ void mqtt_handler_ota::publish_auto_discovery() {
     publish_state();
 }
 
-
-
-
-void mqtt_handler_ota::publish_state() {
+void ha_mqtt_handler::publish_state() {
     char topic[MAX_TOPIC_LEN];
     char payload[MAX_PAYLOAD_LEN];
 
     snprintf(topic, sizeof(topic), "%s/%s/state", MQTT_ROOT_TOPIC, config_->eid);
 
-    int64_t uptime_seconds = esp_timer_get_time() / 1000000;
-    float cpu_load = get_cpu_load().total;
-    uint32_t free_memory = esp_get_free_heap_size();
+    int payload_len=0;
 
-    int payload_len = snprintf(payload, sizeof(payload),
+    int64_t now = esp_timer_get_time()/1000;
+
+    if (built_in_sensor_next_ts_ < now){
+      built_in_sensor_next_ts_ = now + 10000; // 10s on builtin stuff
+
+      int64_t uptime_seconds = now / 1000;
+      float cpu_load = get_cpu_load().total;
+      uint32_t free_memory = esp_get_free_heap_size();
+
+      payload_len = snprintf(payload, sizeof(payload),
              "{\"uptime\": %lld, \"cpu_load\": %.1f, \"free_memory\": %lu",
              uptime_seconds, cpu_load, free_memory);
+    }
 
     for (const auto& sensor : sensors_) {
-        std::string sensor_payload = sensor->getPayload();
+        std::string sensor_payload = sensor->get_payload();
         if (!sensor_payload.empty()) {
-            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+            //first?
+            if (payload_len==0){
+              payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                    "{%s", sensor_payload.c_str());
+            } else {
+               payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
                                     ", %s", sensor_payload.c_str());
+            }
+        }
+    }
+    if (payload_len>0){
+      // Close the JSON object
+      payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "}");
+      esp_mqtt_client_publish(mqtt_client_, topic, payload, 0, 0, 0);
+      //ESP_LOGI(TAG, "Published state: %s", payload);
+    }
+
+
+     // Now publish each subdevice state separately
+    for (const auto& subdevice : sub_devices_) {
+        // Create unique topic for each subdevice
+        snprintf(topic, sizeof(topic), "%s/%s/%s/state",
+                MQTT_ROOT_TOPIC, config_->eid, subdevice->eid());
+
+        // Reset payload buffer
+        payload_len = snprintf(payload, sizeof(payload), "{");
+        bool first_sensor = true;
+
+        // Add all sensors for this subdevice
+        for (const auto& sensor : subdevice->sensors()) {
+            std::string sensor_payload = sensor->get_payload();
+            if (!sensor_payload.empty()) {
+                if (!first_sensor) {
+                    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, ", ");
+                }
+                payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                      "%s", sensor_payload.c_str());
+                first_sensor = false;
+            }
+        }
+
+        // Close the subdevice JSON
+        payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "}");
+
+        // Publish subdevice state if we have any sensor data
+        if (payload_len > 2) {  // More than just "{}"
+            esp_mqtt_client_publish(mqtt_client_, topic, payload, 0, 0, 0);
+            //ESP_LOGI(TAG, "Published subdevice state for %s: %s", subdevice->eid(), payload);
         }
     }
 
-    // Close the JSON object
-    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "}");
 
-    esp_mqtt_client_publish(mqtt_client_, topic, payload, 0, 0, 0);
-    ESP_LOGI(TAG, "Published state: %s", payload);
 }
 
-void mqtt_handler_ota::publish_discovery(const ControlConfig &config) {
+void ha_mqtt_handler::publish_discovery(const ha_discovery::control_config_t &config) {
     char discovery_topic[MAX_TOPIC_LEN];
     char payload[MAX_PAYLOAD_LEN];
 
@@ -248,8 +306,7 @@ void mqtt_handler_ota::publish_discovery(const ControlConfig &config) {
                                MQTT_ROOT_TOPIC, config_->eid, // state_topic
                                config_->eid, config.value_key, // unique_id
                                config_->eid, // identifiers
-                               config_->model, // name
-                               config_->eid, // name
+                               config_->model, config_->eid,  // name
                                config_->model, // model
                                config_->manufacturer,
                                config_->hardware_revision,
@@ -295,61 +352,88 @@ void mqtt_handler_ota::publish_discovery(const ControlConfig &config) {
     ESP_LOGI(TAG, "Published discovery for %s: sz=%d", config.name, payload_len);
 }
 
-void mqtt_handler_ota::publish_subdevice_discovery(const SubdeviceInfo& subdevice) {
-    for (const auto& sensor : subdevice.sensors) {
-        for (const auto& config : sensor->getDiscoveryConfigs()) {
-            char discovery_topic[MAX_TOPIC_LEN];
-            char payload[MAX_PAYLOAD_LEN];
+void ha_mqtt_handler::publish_discovery(std::shared_ptr<ha_discovery::device_info_t> device_info){
+    char discovery_topic[MAX_TOPIC_LEN];
+    char payload[MAX_PAYLOAD_LEN];
 
-            snprintf(discovery_topic, sizeof(discovery_topic), "homeassistant/%s/%s_%s_%s/config",
-                     config.type, config_->eid, subdevice.id.c_str(), config.value_key);
+    const char* device_manufacturer = "csi";
+    for (auto& sensor : device_info->sensors()) {
+        for (auto& config : sensor->get_control_config()) {
+            snprintf(discovery_topic, sizeof(discovery_topic), "homeassistant/%s/%s_%s/config",
+                     config.type, device_info->eid(), config.value_key);
 
+            // todo should we always have a command topic??=
             int payload_len = snprintf(payload, sizeof(payload),
-                "{"
-                "\"name\":\"%s %s\","
-                "\"state_topic\":\"%s/%s/state\","
-                "\"unique_id\":\"%s_%s_%s\","
-                "\"device\":{"
-                "\"identifiers\":[\"%s_%s\"],"
-                "\"name\":\"%s\","
-                "\"model\":\"%s\","
-                "\"manufacturer\":\"%s\","
-                "\"via_device\":\"%s\""
-                "},"
-                "\"value_template\":\"{{ value_json.%s.%s }}\",",
-                subdevice.name.c_str(), config.name,
-                MQTT_ROOT_TOPIC, config_->eid,
-                config_->eid, subdevice.id.c_str(), config.value_key,
-                config_->eid, subdevice.id.c_str(),
-                subdevice.name.c_str(),
-                subdevice.model.c_str(),
-                config_->manufacturer,
-                config_->eid,
-                subdevice.id.c_str(), config.value_key
+                                       "{"
+                                       "\"name\":\"%s\","
+                                       "\"state_topic\":\"%s/%s/%s/state\","
+                                       "\"unique_id\":\"%s_%s\","
+                                       "\"device\":{"
+                                       "\"identifiers\":[\"%s\"],"
+                                       "\"name\":\"%s\","
+                                       "\"model\":\"%s\","
+                                       "\"manufacturer\":\"%s\","
+                                       "\"hw_version\":\"%s\","
+                                       "\"sw_version\":\"%s\","
+                                       "\"via_device\":\"%s\""
+                                       "},"
+                                       "\"value_template\":\"{{ value_json.%s }}\","
+                                       "\"command_topic\":\"%s/%s/%s/set\"",
+                                       config.name, // meassurement name
+                                       MQTT_ROOT_TOPIC, config_->eid, device_info->eid(), // state_topic
+                                       device_info->eid(), config.value_key, // unique_id
+                                       device_info->eid(), // identifiers
+                                       device_info->name(), // device name
+                                       device_info->model(), // model
+                                       device_manufacturer,
+                                       device_info->hw_version(),
+                                       device_info->sw_version(),
+                                       config_->eid, // via device
+                                       config.value_key,
+                                       MQTT_ROOT_TOPIC, config_->eid, config.value_key
             );
 
-            // Add other config options as in the original publish_discovery method
+            if (strcmp(config.type, "number") == 0) {
+                payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                        R"(,"min":%.1f,"max":%.1f,"step":%.2f,"mode":"%s")",
+                                        config.min, config.max, config.step, config.mode);
+            } else if (strcmp(config.type, "select") == 0 && config.options != nullptr) {
+                payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, ",\"options\":[");
+                for (int i = 0; i < config.options_count; i++) {
+                    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                            "\"%s\"%s", config.options[i], (i < config.options_count - 1) ? "," : "");
+                }
+                payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "]");
+            } else if (strcmp(config.type, "switch") == 0) {
+                payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                        ",\"payload_on\":\"ON\",\"payload_off\":\"OFF\","
+                                        "\"state_on\":\"ON\",\"state_off\":\"OFF\"");
+            }
+
             if (config.unit) {
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                        "\"unit_of_measurement\":\"%s\",", config.unit);
+                                        R"(,"unit_of_measurement":"%s")", config.unit);
             }
 
             if (config.device_class) {
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                        "\"device_class\":\"%s\",", config.device_class);
+                                        R"(,"device_class":"%s")", config.device_class);
             }
 
-            // Remove trailing comma and close JSON object
-            payload[payload_len - 1] = '}';
+            // hardcode expire for now
+            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                    ",\"expire_after\":30");
+
+            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "}");
 
             esp_mqtt_client_publish(mqtt_client_, discovery_topic, payload, 0, 1, 0);
-            ESP_LOGI(TAG, "Published discovery for subdevice %s %s: sz=%d", subdevice.name.c_str(), config.name, payload_len);
+            ESP_LOGI(TAG, "Published discovery for subdevice %s : sz=%d", config.name, payload_len);
         }
     }
 }
 
-void mqtt_handler_ota::publish_state_wrapper(void* arg) {
-    mqtt_handler_ota* handler = static_cast<mqtt_handler_ota*>(arg);
+void ha_mqtt_handler::publish_state_wrapper(void* arg) {
+    auto handler = static_cast<ha_mqtt_handler*>(arg);
     handler->publish_state();
 }
 

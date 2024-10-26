@@ -5,6 +5,7 @@
 
 #define TAG "i2c_utils"
 
+/*
 esp_err_t reset_i2c_bus(gpio_num_t sda_gpio, gpio_num_t scl_gpio) {
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
@@ -35,40 +36,10 @@ esp_err_t reset_i2c_bus(gpio_num_t sda_gpio, gpio_num_t scl_gpio) {
 
     return ESP_OK;
 }
+*/
 
-esp_err_t i2c_bus_init(gpio_num_t sda_io_num, gpio_num_t scl_io_num, i2c_master_bus_handle_t* i2c_bus)
+esp_err_t i2c_bus_init(gpio_num_t sda_io_num, gpio_num_t scl_io_num, bool internal_pullup_enable, i2c_master_bus_handle_t* i2c_bus)
 {
-    /*
-    ESP_LOGI(TAG, "Reset I2C bus");
-    auto ret = reset_i2c_bus(sda_io_num, scl_io_num);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to reset I2C bus");
-        return ret;
-    }
-
-    ESP_LOGI(TAG, "Manually configure GPIOs without pull-ups");
-    // Manually configure GPIOs without pull-ups
-    gpio_config_t io_conf = {};
-    io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-
-    io_conf.pin_bit_mask = (1ULL << sda_io_num);
-    ret = gpio_config(&io_conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure SDA pin: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    io_conf.pin_bit_mask = (1ULL << scl_io_num);
-    ret = gpio_config(&io_conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure SCL pin: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    */
-
     ESP_LOGI(TAG, "Initialize I2C bus");
 
     i2c_master_bus_config_t bus_config = {};
@@ -77,8 +48,7 @@ esp_err_t i2c_bus_init(gpio_num_t sda_io_num, gpio_num_t scl_io_num, i2c_master_
     bus_config.i2c_port = I2C_NUM_0;
     bus_config.sda_io_num = sda_io_num;
     bus_config.scl_io_num = scl_io_num;
-    //bus_config.flags.enable_internal_pullup = true;
-    bus_config.flags.enable_internal_pullup = false;
+    bus_config.flags.enable_internal_pullup = internal_pullup_enable;
     auto ret = i2c_new_master_bus(&bus_config, i2c_bus);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize I2C bus");

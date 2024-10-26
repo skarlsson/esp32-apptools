@@ -17,7 +17,7 @@ static void generate_uuid(char* uuid_str) {
         random_values[i] = esp_random();
     }
 
-    snprintf(uuid_str, MAX_EQUIPMENT_ID_LENGTH,
+    snprintf(uuid_str, device_config_t::MAX_EQUIPMENT_ID_LENGTH,
              "%08" PRIx32 "-%04" PRIx16 "-%04" PRIx16 "-%04" PRIx16 "-%04" PRIx16 "%08" PRIx32,
              random_values[0],
              (uint16_t)(random_values[1] >> 16),
@@ -44,11 +44,11 @@ esp_err_t device_config_init(const char* manufacturer,  const char* model, const
             cJSON *eid1 = cJSON_GetObjectItemCaseSensitive(root, "equipment_id");
             cJSON *eid2 = cJSON_GetObjectItemCaseSensitive(root, "eid");
             if (cJSON_IsString(eid1)) {
-                strncpy(config->eid, eid1->valuestring, MAX_EQUIPMENT_ID_LENGTH - 1);
-                config->eid[MAX_EQUIPMENT_ID_LENGTH - 1] = '\0';
+                strncpy(config->eid, eid1->valuestring, device_config_t::MAX_EQUIPMENT_ID_LENGTH - 1);
+                config->eid[device_config_t::MAX_EQUIPMENT_ID_LENGTH - 1] = '\0';
             } else if (cJSON_IsString(eid2)) {
-                strncpy(config->eid, eid2->valuestring, MAX_EQUIPMENT_ID_LENGTH - 1);
-                config->eid[MAX_EQUIPMENT_ID_LENGTH - 1] = '\0';
+                strncpy(config->eid, eid2->valuestring, device_config_t::MAX_EQUIPMENT_ID_LENGTH - 1);
+                config->eid[device_config_t::MAX_EQUIPMENT_ID_LENGTH - 1] = '\0';
             } else {
             }
             cJSON_Delete(root);
@@ -64,12 +64,12 @@ esp_err_t device_config_init(const char* manufacturer,  const char* model, const
         ESP_LOGI(TAG, "eid is %s", config->eid);
     }
 
-    strncpy(config->manufacturer, manufacturer, MAX_MANUFACTURER_LENGTH - 1);
-    config->manufacturer[MAX_MANUFACTURER_LENGTH - 1] = '\0';
-    strncpy(config->model, model, MAX_MODEL_LENGTH - 1);
-    config->model[MAX_MODEL_LENGTH - 1] = '\0';
-    strncpy(config->hardware_revision, hardware_revision, MAX_VERSION_LENGTH - 1);
-    config->hardware_revision[MAX_VERSION_LENGTH - 1] = '\0';
+    strncpy(config->manufacturer, manufacturer, device_config_t::MAX_MANUFACTURER_LENGTH - 1);
+    config->manufacturer[device_config_t::MAX_MANUFACTURER_LENGTH - 1] = '\0';
+    strncpy(config->model, model, device_config_t::MAX_MODEL_LENGTH - 1);
+    config->model[device_config_t::MAX_MODEL_LENGTH - 1] = '\0';
+    strncpy(config->hardware_revision, hardware_revision, device_config_t::MAX_VERSION_LENGTH - 1);
+    config->hardware_revision[device_config_t::MAX_VERSION_LENGTH - 1] = '\0';
 
     // Create JSON object
     cJSON *root = cJSON_CreateObject();
@@ -124,15 +124,15 @@ esp_err_t device_config_init(device_config_t* config) {
         return ESP_FAIL;
     }
 
-    strncpy(config->manufacturer, manufacturer->valuestring, MAX_MANUFACTURER_LENGTH - 1);
-    strncpy(config->model, model->valuestring, MAX_MODEL_LENGTH - 1);
-    strncpy(config->eid, eid->valuestring, MAX_EQUIPMENT_ID_LENGTH - 1);
-    strncpy(config->hardware_revision, hw_revision->valuestring, MAX_VERSION_LENGTH - 1);
+    strncpy(config->manufacturer, manufacturer->valuestring, device_config_t::MAX_MANUFACTURER_LENGTH - 1);
+    strncpy(config->model, model->valuestring, device_config_t::MAX_MODEL_LENGTH - 1);
+    strncpy(config->eid, eid->valuestring, device_config_t::MAX_EQUIPMENT_ID_LENGTH - 1);
+    strncpy(config->hardware_revision, hw_revision->valuestring, device_config_t::MAX_VERSION_LENGTH - 1);
 
-    config->manufacturer[MAX_MANUFACTURER_LENGTH - 1] = '\0';
-    config->model[MAX_MODEL_LENGTH - 1] = '\0';
-    config->eid[MAX_EQUIPMENT_ID_LENGTH - 1] = '\0';
-    config->hardware_revision[MAX_VERSION_LENGTH - 1] = '\0';
+    config->manufacturer[device_config_t::MAX_MANUFACTURER_LENGTH - 1] = '\0';
+    config->model[device_config_t::MAX_MODEL_LENGTH - 1] = '\0';
+    config->eid[device_config_t::MAX_EQUIPMENT_ID_LENGTH - 1] = '\0';
+    config->hardware_revision[device_config_t::MAX_VERSION_LENGTH - 1] = '\0';
 
     cJSON_Delete(root);
     ESP_LOGI(TAG, "Loaded config: ID=%s, HW=%s", config->eid, config->hardware_revision);

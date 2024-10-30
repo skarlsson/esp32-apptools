@@ -6,7 +6,7 @@
 
 static const char *TAG = "mqtt_handler_ota";
 
-#define MAX_TOPIC_LEN 128
+#define MAX_TOPIC_LEN 256
 #define MAX_PAYLOAD_LEN 1024
 #define MQTT_ROOT_TOPIC "huzza32"
 
@@ -73,12 +73,25 @@ void ha_mqtt_handler::send_logs(const char* logs, size_t size) {
     esp_mqtt_client_publish(mqtt_client_, topic, logs, size, 0, 0);
 }
 
-void ha_mqtt_handler::addDevice(std::shared_ptr<ha_discovery::device_info_t> p) {
+void ha_mqtt_handler::add_managed_device(std::shared_ptr<ha_discovery::device_info_t> p) {
     // TODO SHOULD WE BE ABLE TO REDISCOVER UPDATED SENSORS - IE UPDATED VERSIONS?
     sub_devices_.push_back(p);
+    subscribe_topics(p);
     publish_discovery(p);
 }
 
+void ha_mqtt_handler::update_managed_device(const char* eid, const char* sw_tag, const char* sw_sha256) {
+    auto it = std::find_if(sub_devices_.begin(), sub_devices_.end(),
+        [eid](const std::shared_ptr<ha_discovery::device_info_t>& device) {
+            return (strcmp(device->eid(), eid)==0);
+        });
+
+    if (it != sub_devices_.end()) {
+        (*it)->set_sw_tag(sw_tag);
+        (*it)->set_sw_sha256(sw_sha256);
+        publish_discovery(*it); // Re-publish discovery info with updated metadata
+    }
+}
 /*void mqtt_handler_ota::add_device_sensor(const char* eid, std::shared_ptr<SensorWrapper> sensor) {
     for (const auto& config : sensor->getDiscoveryConfigs()) {
         publish_subdevice_discovery(eid, config);
@@ -138,6 +151,7 @@ void ha_mqtt_handler::handle_control_message(const char *topic, int topic_len, c
     ESP_LOGI(TAG, "Received test control message - Topic: %s, Value: %s", topic_str, value);
 
 
+    // todo - how do we separate ota of self to ota of child?
     if (strstr(topic_str, "ota_string") != nullptr) {
         ESP_LOGI(TAG, "OTA string received: %s", value);
         ota_handler_->handle_ota_update(value);
@@ -152,13 +166,13 @@ void ha_mqtt_handler::handle_control_message(const char *topic, int topic_len, c
 void ha_mqtt_handler::publish_auto_discovery() {
     // we could move this to a better structure since we dont export to ha
     ha_discovery::control_config_t subscriptions[] = {
-        {"text", "config", "config_string", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, 0},
-        {"text", "ota", "ota_string", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, 0}
-        };
+        ha_discovery::control_config_t::make_subscribed_text("config", "config_string"),
+        ha_discovery::control_config_t::make_subscribed_text("ota", "ota_string"),
+    };
 
     // default ha config
     ha_discovery::control_config_t builtin_controls[] = {
-        {"button", "reboot", "reboot_button", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, 0},
+        ha_discovery::control_config_t::make_button("reboot", "reboot_button")
     };
 
     ha_discovery::control_config_t builtin_sensors[] = {
@@ -279,7 +293,6 @@ void ha_mqtt_handler::publish_state() {
 
 
 }
-
 void ha_mqtt_handler::publish_discovery(const ha_discovery::control_config_t &config) {
     char discovery_topic[MAX_TOPIC_LEN];
     char payload[MAX_PAYLOAD_LEN];
@@ -288,149 +301,203 @@ void ha_mqtt_handler::publish_discovery(const ha_discovery::control_config_t &co
              config.type, config_->eid, config.value_key);
 
     int payload_len = snprintf(payload, sizeof(payload),
-                               "{"
-                               "\"name\":\"%s\","
-                               "\"state_topic\":\"%s/%s/state\","
-                               "\"unique_id\":\"%s_%s\","
-                               "\"device\":{"
-                               "\"identifiers\":[\"%s\"],"
-                               "\"name\":\"%s %s\","
-                               "\"model\":\"%s\","
-                               "\"manufacturer\":\"%s\","
-                               "\"hw_version\":\"%s\","
-                               "\"sw_version\":\"%s\""
-                               "},"
-                               "\"value_template\":\"{{ value_json.%s }}\","
-                               "\"command_topic\":\"%s/%s/%s/set\"",
-                               config.name,
-                               MQTT_ROOT_TOPIC, config_->eid, // state_topic
-                               config_->eid, config.value_key, // unique_id
-                               config_->eid, // identifiers
-                               config_->model, config_->eid,  // name
-                               config_->model, // model
-                               config_->manufacturer,
-                               config_->hardware_revision,
-                               FIRMWARE_VERSION,
-                               config.value_key,
-                               MQTT_ROOT_TOPIC, config_->eid, config.value_key
-    );
+                             "{"
+                             "\"name\":\"%s\","
+                             "\"state_topic\":\"%s/%s/state\","
+                             "\"unique_id\":\"%s_%s\","
+                             "\"device\":{"
+                             "\"identifiers\":[\"%s\"],"
+                             "\"name\":\"%s %.8s\","
+                             "\"model\":\"%s\","
+                             "\"manufacturer\":\"%s\","
+                             "\"hw_version\":\"%s\","
+                             "\"sw_version\":\"%s\""
+                             "},"
+                             "\"value_template\":\"{{ value_json.%s }}\"",
+                             config.name,
+                             MQTT_ROOT_TOPIC, config_->eid,
+                             config_->eid, config.value_key,
+                             config_->eid,
+                             config_->model, config_->eid,
+                             config_->model,
+                             config_->manufacturer,
+                             config_->hardware_revision,
+                             config_->software_revision,
+                             config.value_key);
 
-    if (strcmp(config.type, "number") == 0) {
+    // Only add command topic if the entity is controllable
+    if (config.is_controllable) {
         payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                R"(,"min":%.1f,"max":%.1f,"step":%.2f,"mode":"%s")",
-                                config.min, config.max, config.step, config.mode);
-    } else if (strcmp(config.type, "select") == 0 && config.options != nullptr) {
+                              ",\"command_topic\":\"%s/%s/%s/set\"",
+                              MQTT_ROOT_TOPIC, config_->eid, config.value_key);
+    }
+
+    // Handle different types with their specific configurations
+    if (strcmp(config.type, "number") == 0) {
+        if (config.min != config.max) {  // Only add if valid range is specified
+            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                  ",\"min\":%.1f,\"max\":%.1f", config.min, config.max);
+        }
+        if (config.step > 0) {
+            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                  ",\"step\":%.2f", config.step);
+        }
+        if (config.mode) {
+            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                  ",\"mode\":\"%s\"", config.mode);
+        }
+    } else if (strcmp(config.type, "select") == 0 && config.options && config.options_count > 0) {
         payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, ",\"options\":[");
         for (int i = 0; i < config.options_count; i++) {
             payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                    "\"%s\"%s", config.options[i], (i < config.options_count - 1) ? "," : "");
+                                  "\"%s\"%s", config.options[i], (i < config.options_count - 1) ? "," : "");
         }
         payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "]");
-    } else if (strcmp(config.type, "switch") == 0) {
+    } else if (strcmp(config.type, "switch") == 0 || strcmp(config.type, "binary_sensor") == 0) {
+        const char *s_on = config.state_on ? config.state_on : "ON";
+        const char *s_off = config.state_off ? config.state_off : "OFF";
+
         payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                ",\"payload_on\":\"ON\",\"payload_off\":\"OFF\","
-                                "\"state_on\":\"ON\",\"state_off\":\"OFF\"");
+                              ",\"state_on\":\"%s\",\"state_off\":\"%s\"", s_on, s_off);
+
+        if (config.is_controllable && config.payload_on && config.payload_off) {
+            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                  ",\"payload_on\":\"%s\",\"payload_off\":\"%s\"",
+                                  config.payload_on, config.payload_off);
+        }
     }
 
+    // Add optional fields if present
     if (config.unit) {
         payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                R"(,"unit_of_measurement":"%s")", config.unit);
+                              ",\"unit_of_measurement\":\"%s\"", config.unit);
     }
-
     if (config.device_class) {
         payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                R"(,"device_class":"%s")", config.device_class);
+                              ",\"device_class\":\"%s\"", config.device_class);
     }
 
-    // hardcode expire for now
     payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                            ",\"expire_after\":30");
-
-    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "}");
+                          ",\"expire_after\":30}");
 
     esp_mqtt_client_publish(mqtt_client_, discovery_topic, payload, 0, 1, 0);
     ESP_LOGI(TAG, "Published discovery for %s: sz=%d", config.name, payload_len);
 }
 
-void ha_mqtt_handler::publish_discovery(std::shared_ptr<ha_discovery::device_info_t> device_info){
+void ha_mqtt_handler::publish_discovery(std::shared_ptr<ha_discovery::device_info_t> device_info) {
     char discovery_topic[MAX_TOPIC_LEN];
     char payload[MAX_PAYLOAD_LEN];
 
     const char* device_manufacturer = "csi";
+
+    // Iterate through each sensor on the sub-device
     for (auto& sensor : device_info->sensors()) {
+        // Process each configuration for this sensor
         for (auto& config : sensor->get_control_config()) {
             snprintf(discovery_topic, sizeof(discovery_topic), "homeassistant/%s/%s_%s/config",
-                     config.type, device_info->eid(), config.value_key);
+                    config.type, device_info->eid(), config.value_key);
 
-            // todo should we always have a command topic??=
+            // Build the base configuration
             int payload_len = snprintf(payload, sizeof(payload),
-                                       "{"
-                                       "\"name\":\"%s\","
-                                       "\"state_topic\":\"%s/%s/%s/state\","
-                                       "\"unique_id\":\"%s_%s\","
-                                       "\"device\":{"
-                                       "\"identifiers\":[\"%s\"],"
-                                       "\"name\":\"%s\","
-                                       "\"model\":\"%s\","
-                                       "\"manufacturer\":\"%s\","
-                                       "\"hw_version\":\"%s\","
-                                       "\"sw_version\":\"%s\","
-                                       "\"via_device\":\"%s\""
-                                       "},"
-                                       "\"value_template\":\"{{ value_json.%s }}\","
-                                       "\"command_topic\":\"%s/%s/%s/set\"",
-                                       config.name, // meassurement name
-                                       MQTT_ROOT_TOPIC, config_->eid, device_info->eid(), // state_topic
-                                       device_info->eid(), config.value_key, // unique_id
-                                       device_info->eid(), // identifiers
-                                       device_info->name(), // device name
-                                       device_info->model(), // model
-                                       device_manufacturer,
-                                       device_info->hw_version(),
-                                       device_info->sw_version(),
-                                       config_->eid, // via device
-                                       config.value_key,
-                                       MQTT_ROOT_TOPIC, config_->eid, config.value_key
-            );
+                                     "{"
+                                     "\"name\":\"%s\","
+                                     "\"state_topic\":\"%s/%s/%s/state\","
+                                     "\"unique_id\":\"%s_%s\","
+                                     "\"device\":{"
+                                     "\"identifiers\":[\"%s\"],"
+                                     "\"name\":\"%s\","
+                                     "\"model\":\"%s\","
+                                     "\"manufacturer\":\"%s\","
+                                     "\"hw_version\":\"%s\","
+                                     "\"sw_version\":\"%s;SHA256:%s\","
+                                     "\"via_device\":\"%s\""
+                                     "},"
+                                     "\"value_template\":\"{{ value_json.%s }}\"",
+                                     config.name,
+                                     MQTT_ROOT_TOPIC, config_->eid, device_info->eid(),
+                                     device_info->eid(), config.value_key,
+                                     device_info->eid(),
+                                     device_info->name(),
+                                     device_info->model(),
+                                     device_manufacturer,
+                                     device_info->hw_version(),
+                                     device_info->sw_tag(), device_info->sha256(),
+                                     config_->eid,
+                                     config.value_key);
 
-            if (strcmp(config.type, "number") == 0) {
+            // Add command topic only if entity is controllable
+            // this seems wrong - we need  MQTT_ROOT_TOPIC, config_->eid, device_info->eid(),
+            if (config.is_controllable) {
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                        R"(,"min":%.1f,"max":%.1f,"step":%.2f,"mode":"%s")",
-                                        config.min, config.max, config.step, config.mode);
-            } else if (strcmp(config.type, "select") == 0 && config.options != nullptr) {
+                                      ",\"command_topic\":\"%s/%s/%s/set\"",
+                                      MQTT_ROOT_TOPIC, config_->eid, config.value_key);
+            }
+
+            // Handle type-specific configurations
+            if (strcmp(config.type, "number") == 0) {
+                if (config.min != config.max) {
+                    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                          ",\"min\":%.1f,\"max\":%.1f", config.min, config.max);
+                }
+                if (config.step > 0) {
+                    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                          ",\"step\":%.2f", config.step);
+                }
+                if (config.mode) {
+                    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                          ",\"mode\":\"%s\"", config.mode);
+                }
+            } else if (strcmp(config.type, "select") == 0 && config.options && config.options_count > 0) {
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, ",\"options\":[");
                 for (int i = 0; i < config.options_count; i++) {
                     payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                            "\"%s\"%s", config.options[i], (i < config.options_count - 1) ? "," : "");
+                                          "\"%s\"%s", config.options[i],
+                                          (i < config.options_count - 1) ? "," : "");
                 }
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "]");
-            } else if (strcmp(config.type, "switch") == 0) {
+            } else if (strcmp(config.type, "switch") == 0 || strcmp(config.type, "binary_sensor") == 0) {
+                const char *s_on = config.state_on ? config.state_on : "ON";
+                const char *s_off = config.state_off ? config.state_off : "OFF";
+
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                        ",\"payload_on\":\"ON\",\"payload_off\":\"OFF\","
-                                        "\"state_on\":\"ON\",\"state_off\":\"OFF\"");
+                                      ",\"state_on\":\"%s\",\"state_off\":\"%s\"", s_on, s_off);
+
+                if (config.is_controllable && config.payload_on && config.payload_off) {
+                    payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
+                                          ",\"payload_on\":\"%s\",\"payload_off\":\"%s\"",
+                                          config.payload_on, config.payload_off);
+                }
             }
 
+            // Add optional fields
             if (config.unit) {
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                        R"(,"unit_of_measurement":"%s")", config.unit);
+                                      ",\"unit_of_measurement\":\"%s\"", config.unit);
             }
-
             if (config.device_class) {
                 payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                        R"(,"device_class":"%s")", config.device_class);
+                                      ",\"device_class\":\"%s\"", config.device_class);
             }
 
-            // hardcode expire for now
+            // Add expiration
             payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len,
-                                    ",\"expire_after\":30");
+                                  ",\"expire_after\":30}");
 
-            payload_len += snprintf(payload + payload_len, sizeof(payload) - payload_len, "}");
-
+            // Publish discovery message
             esp_mqtt_client_publish(mqtt_client_, discovery_topic, payload, 0, 1, 0);
-            ESP_LOGI(TAG, "Published discovery for subdevice %s : sz=%d", config.name, payload_len);
+            ESP_LOGI(TAG, "Published discovery for subdevice %s: sz=%d", config.name, payload_len);
         }
     }
 }
+
+void ha_mqtt_handler::subscribe_topics(std::shared_ptr<ha_discovery::device_info_t> p) {
+    ESP_LOGI(TAG, "Subscribing to topics");
+    char topic[256];
+    snprintf(topic, sizeof(topic), "%s/%s/%s/%s/set", MQTT_ROOT_TOPIC, config_->eid, p->eid(), "ota");
+    esp_mqtt_client_subscribe(mqtt_client_, topic, 0);
+    ESP_LOGI(TAG, "Subscribed to topic: %s", topic);
+}
+
 
 void ha_mqtt_handler::publish_state_wrapper(void* arg) {
     auto handler = static_cast<ha_mqtt_handler*>(arg);

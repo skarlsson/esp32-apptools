@@ -27,13 +27,16 @@ public:
         sensors_.push_back(sensor);
     }
 
-    void addDevice(std::shared_ptr<ha_discovery::device_info_t>);
+    void add_managed_device(std::shared_ptr<ha_discovery::device_info_t>);
+    void update_managed_device(const char* eid, const char* sw_tag, const char* sw_sha256);
 
     void start();
 
     void publish_auto_discovery();
 protected:
     void publish_discovery(const ha_discovery::control_config_t &config);
+
+    void subscribe_topics(std::shared_ptr<ha_discovery::device_info_t>);
     void publish_discovery(std::shared_ptr<ha_discovery::device_info_t>);
 
     void event_handler(esp_event_base_t base, int32_t event_id, void *event_data);

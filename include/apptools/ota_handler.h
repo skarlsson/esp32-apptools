@@ -1,5 +1,8 @@
-#include <esp_err.h>
 #pragma once
+#include <esp_err.h>
+#include <vector>
+#include <memory>
+#include <apptools/device_update_handler.h>
 
 #if !defined(CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP) && \
     !defined(CONFIG_ESP_HTTPS_OTA_VERIFY_CERT_BUNDLE) && \
@@ -35,10 +38,17 @@ class ota_handler
 public:
     virtual ~ota_handler() = default;
     virtual void handle_ota_update(const char* json_manifest) =0;
-
+    bool handle_subdevice_ota(const ha_discovery::device_info_t* device, const char* json);
+    
+    
     esp_err_t confirm_update();
     bool is_reboot_pending() const { return reboot_pending_; }
     bool is_verify_pending() const { return verify_pending_; }
+
+    // Register a new device update handler
+    void register_device_handler(std::shared_ptr<device_update_handler> handler) {
+        device_handlers_.push_back(handler);
+    }
 
 protected:
     void set_reboot_pending() { reboot_pending_ = true; }
@@ -49,4 +59,5 @@ protected:
     const char* hardware_revision_ = nullptr;
 private:
     bool verify_pending_ = false;
+    std::vector<std::shared_ptr<device_update_handler>> device_handlers_;
 };

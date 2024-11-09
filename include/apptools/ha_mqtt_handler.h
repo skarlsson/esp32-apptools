@@ -7,6 +7,10 @@
 #include "apptools/device_config.h"
 #include <apptools/ha_discovery.h>
 
+#if CONFIG_MAIN_TASK_STACK_SIZE < 4096
+#error "Main task stack size must be at least 4096 bytes. menuconfig: Component config → ESP System Settings → Main task stack size"
+#endif
+
 class LogCollector;
 
 /*
@@ -23,7 +27,7 @@ public:
 
     void enable_logging();
 
-    void addSensor(std::shared_ptr<ha_discovery::sensor_wrapper_t> sensor) {
+    void add_sensor(std::shared_ptr<ha_discovery::sensor_wrapper_t> sensor) {
         sensors_.push_back(sensor);
     }
 

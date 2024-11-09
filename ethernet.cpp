@@ -13,6 +13,17 @@ static esp_netif_t *eth_netif = NULL;
 static esp_eth_handle_t eth_handle = NULL;
 static EventGroupHandle_t s_connection_event_group;
 
+
+void prioritize_ethernet_routing(esp_netif_t* eth_netif) {
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(eth_netif, &ip_info) == ESP_OK) {
+        // Set ethernet as default interface with higher priority
+        esp_netif_set_default_netif(eth_netif);
+        ESP_LOGI(TAG, "Set ethernet as default interface");
+    }
+}
+
+
 // Ethernet event handler
 static void eth_event_handler(void *arg, esp_event_base_t event_base,
                               int32_t event_id, void *event_data) {
@@ -54,6 +65,17 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(TAG, "ETHGW:" IPSTR, IP2STR(&ip_info->gw));
     ESP_LOGI(TAG, "~~~~~~~~~~~");
 
+
+    // Set ethernet as default interface
+    esp_netif_set_default_netif(eth_netif);
+    ESP_LOGI(TAG, "Set ethernet as default interface");
+
+    // For SNTP, bind to ethernet IP
+    /*esp_sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
+    esp_sntp_set_local_ip4(ip_info->ip.addr);
+    ESP_LOGI(TAG, "SNTP bound to ethernet IP");
+    */
+
     xEventGroupSetBits(s_connection_event_group, BIT0);
 }
 
@@ -64,13 +86,14 @@ esp_err_t utils_ethernet_init(void) {
         return ESP_FAIL;
     }
     esp_netif_config_t netif_config = ESP_NETIF_DEFAULT_ETH();
-
     eth_netif = esp_netif_new(&netif_config);
+
     eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
     eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
     phy_config.phy_addr = 0;
     phy_config.reset_gpio_num = -1;
     phy_config.autonego_timeout_ms = 5000;
+    phy_config.reset_timeout_ms = 1000; // Increase reset timeout
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
     eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
@@ -108,7 +131,13 @@ esp_err_t utils_ethernet_init(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &eth_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &ip_event_handler, NULL));
     ESP_ERROR_CHECK(esp_eth_start(eth_handle));
-    xEventGroupWaitBits(s_connection_event_group, BIT0, pdFALSE, pdTRUE, portMAX_DELAY);
+    EventBits_t bits  = xEventGroupWaitBits(s_connection_event_group, BIT0, pdFALSE, pdTRUE, portMAX_DELAY);
+    if (bits & BIT0) {
+        ESP_LOGI(TAG, "Ethernet initialized and connected");
+    } else {
+        ESP_LOGE(TAG, "Ethernet initialization timeout");
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 #endif

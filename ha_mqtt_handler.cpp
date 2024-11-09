@@ -148,15 +148,47 @@ void ha_mqtt_handler::handle_control_message(const char *topic, int topic_len, c
     strncpy(value, data, safe_data_len);
     value[safe_data_len] = '\0';
 
-    ESP_LOGI(TAG, "Received test control message - Topic: %s, Value: %s", topic_str, value);
+    ESP_LOGI(TAG, "Received control message - Topic: %s, Value: %s", topic_str, value);
 
 
-    // todo - how do we separate ota of self to ota of child?
-    if (strstr(topic_str, "ota_string") != nullptr) {
-        ESP_LOGI(TAG, "OTA string received: %s", value);
+    // Parse topic structure: huzza32/<device_id>/<sub_device_id>/ota_string/set
+    char *topic_parts[5];
+    char *topic_copy = strdup(topic_str);
+    char *token = strtok(topic_copy, "/");
+    int part_count = 0;
+
+    while (token != nullptr && part_count < 5) {
+        topic_parts[part_count++] = token;
+        token = strtok(nullptr, "/");
+    }
+
+    // Check if this is a sub-device OTA request
+    if (part_count == 5 && strcmp(topic_parts[3], "ota_string") == 0) {
+        const char* sub_device_id = topic_parts[2];
+
+        // Find the corresponding sub-device
+        auto it = std::find_if(sub_devices_.begin(), sub_devices_.end(),
+            [sub_device_id](const std::shared_ptr<ha_discovery::device_info_t>& device) {
+                return (strcmp(device->eid(), sub_device_id) == 0);
+            });
+
+        if (it != sub_devices_.end()) {
+            ESP_LOGI(TAG, "Processing OTA for sub-device: %s", sub_device_id);
+            // Call OTA proxy with the found device and OTA string
+            ota_handler_->handle_subdevice_ota((*it).get(), value);
+
+        } else {
+            ESP_LOGE(TAG, "Sub-device not found: %s", sub_device_id);
+        }
+
+    } else if (strstr(topic_str, "ota_string") != nullptr) {
+        // Handle main device OTA
+        ESP_LOGI(TAG, "OTA string received for main device: %s", value);
         ota_handler_->handle_ota_update(value);
+
     } else if (strstr(topic_str, "config_string") != nullptr) {
         ESP_LOGI(TAG, "config string received: %s", value);
+
     } else if (strstr(topic_str, "reboot_button") != nullptr) {
         ESP_LOGI(TAG, "Reboot button pressed");
         reboot_pending_ = true;
@@ -216,8 +248,9 @@ void ha_mqtt_handler::publish_auto_discovery() {
 }
 
 void ha_mqtt_handler::publish_state() {
-    char topic[MAX_TOPIC_LEN];
-    char payload[MAX_PAYLOAD_LEN];
+    // Alloc on heap
+    static char topic[MAX_TOPIC_LEN];
+    static char payload[MAX_PAYLOAD_LEN];
 
     snprintf(topic, sizeof(topic), "%s/%s/state", MQTT_ROOT_TOPIC, config_->eid);
 
@@ -294,8 +327,8 @@ void ha_mqtt_handler::publish_state() {
 
 }
 void ha_mqtt_handler::publish_discovery(const ha_discovery::control_config_t &config) {
-    char discovery_topic[MAX_TOPIC_LEN];
-    char payload[MAX_PAYLOAD_LEN];
+    static char discovery_topic[MAX_TOPIC_LEN];
+    static char payload[MAX_PAYLOAD_LEN];
 
     snprintf(discovery_topic, sizeof(discovery_topic), "homeassistant/%s/%s_%s/config",
              config.type, config_->eid, config.value_key);
@@ -385,8 +418,9 @@ void ha_mqtt_handler::publish_discovery(const ha_discovery::control_config_t &co
 }
 
 void ha_mqtt_handler::publish_discovery(std::shared_ptr<ha_discovery::device_info_t> device_info) {
-    char discovery_topic[MAX_TOPIC_LEN];
-    char payload[MAX_PAYLOAD_LEN];
+    // Alloc on heap
+    static char discovery_topic[MAX_TOPIC_LEN];
+    static char payload[MAX_PAYLOAD_LEN];
 
     const char* device_manufacturer = "csi";
 
@@ -493,7 +527,7 @@ void ha_mqtt_handler::publish_discovery(std::shared_ptr<ha_discovery::device_inf
 void ha_mqtt_handler::subscribe_topics(std::shared_ptr<ha_discovery::device_info_t> p) {
     ESP_LOGI(TAG, "Subscribing to topics");
     char topic[256];
-    snprintf(topic, sizeof(topic), "%s/%s/%s/%s/set", MQTT_ROOT_TOPIC, config_->eid, p->eid(), "ota");
+    snprintf(topic, sizeof(topic), "%s/%s/%s/%s/set", MQTT_ROOT_TOPIC, config_->eid, p->eid(), "ota_string");
     esp_mqtt_client_subscribe(mqtt_client_, topic, 0);
     ESP_LOGI(TAG, "Subscribed to topic: %s", topic);
 }

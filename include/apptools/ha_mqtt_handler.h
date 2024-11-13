@@ -25,7 +25,7 @@ public:
 
     inline bool reboot_pending() const { return reboot_pending_; }
 
-    void enable_logging();
+    void enable_logging(LogCollector*);
 
     void add_sensor(std::shared_ptr<ha_discovery::sensor_wrapper_t> sensor) {
         sensors_.push_back(sensor);
@@ -55,7 +55,7 @@ protected:
     esp_mqtt_client_handle_t mqtt_client_ = nullptr;
     const device_config_t *config_ = nullptr;
     ota_handler *ota_handler_ = nullptr;
-    LogCollector* log_collector_ = nullptr;
+    LogCollector* log_collector_= nullptr;
 
     int64_t built_in_sensor_next_ts_ = 0;
 

@@ -30,10 +30,6 @@ void ha_mqtt_handler::start() {
     // it seems that if we start to quick here - kernel crashes...
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
-    log_collector_ = new LogCollector(4096, [this](const char* logs, size_t size) {
-          this->send_logs(logs, size);
-    });
-
     // Start a timer to publish uptime every minute
     esp_timer_create_args_t timer_args = {
         .callback = &publish_state_wrapper,
@@ -45,7 +41,8 @@ void ha_mqtt_handler::start() {
 }
 
 ha_mqtt_handler::~ha_mqtt_handler() {
-    log_collector_->disable();
+    log_collector_->detach_callback();
+    log_collector_ = nullptr;
     // Stop and delete the timer
     if (state_timer_) {
         esp_timer_stop(state_timer_);
@@ -59,11 +56,15 @@ ha_mqtt_handler::~ha_mqtt_handler() {
         esp_mqtt_client_destroy(mqtt_client_);
         mqtt_client_ = nullptr;
     }
-    delete log_collector_;
 }
 
-void ha_mqtt_handler::enable_logging() {
-    log_collector_->enable();
+void ha_mqtt_handler::enable_logging(LogCollector* p) {
+    log_collector_ = p;
+    log_collector_->set_callback(
+             [this](const char* data, size_t len) {
+                 this->send_logs(data, len);
+             }
+         );
 }
 
 void ha_mqtt_handler::send_logs(const char* logs, size_t size) {
